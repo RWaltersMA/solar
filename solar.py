@@ -8,7 +8,6 @@ from kafka.admin import KafkaAdminClient, NewTopic
 import json
 import os
 from kafka import KafkaProducer
-import keyboard
 import decimal
 #from kafka.admin import KafkaAdminClient, NewTopic
 import threading
@@ -39,21 +38,10 @@ def getvalue(old_value):
         new_value = old_value - change_amount
     return round(new_value, 2)
 
-def checkmongodbconnection():
-    try:
-        c=MongoClient(MONGO_URI, server_api=ServerApi('1'), serverSelectionTimeoutMS=5000)
-        c.admin.command('ismaster')
-        time.sleep(2)
-        c.close()
-        return True
-    except:
-        print('\nCould not connect to MongoDB.\n\n')
-        return False
-
 def checkkafkaconnection():
     try:
-        print('\nAttempting to create topic %s on %s\n\n' % args.topic % bootstrap)
-        admin_client = KafkaAdminClient(bootstrap_servers="localhost:9092", client_id='stockgenclient')
+        print('\nAttempting to create topic' + args.topic + ' on ' + args.bootstrap)
+        admin_client = KafkaAdminClient(bootstrap_servers=args.bootstrap, client_id='solargenclient')
 
       #  consumer = kafka.KafkaConsumer(group_id='stockgenclient', bootstrap_servers=[args.bootstrap])
         topic_list = []
@@ -62,6 +50,7 @@ def checkkafkaconnection():
 
     except Exception as e:
         print('%s - skipping topic creation' % e )
+        if str(e)=='NoBrokersAvailable': return False
         return True
         
 def publish_message(kafka_producer, topic_name, key, value):
@@ -72,15 +61,6 @@ def publish_message(kafka_producer, topic_name, key, value):
         kafka_producer.flush()
     except Exception as ex:
         print('Error writing to Kafka - %s' % str(ex))
-
-def quitwrite(counter,starttime):
-    print('\n\nStop execution.\n\n')
-    printstats(counter,starttime)
-    elapsed=(dt.now()-starttime)
-    print('\n\nElapsed time: %s' % elapsed)
-
-    keyboard.unhook_all()
-    os._exit(1)
 
 def printstats(counter,starttime):
     b=dt.now()
@@ -94,12 +74,10 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-d","--devices", type=int, default=250, help="number of devices")
-    parser.add_argument("-k","--kafka",help="Write to Kafka Topic",action="store_true")
+#    parser.add_argument("-k","--kafka",help="Write to Kafka Topic",action="store_true")  In future may support writing to other destinations
     parser.add_argument("-kb","--bootstrap",type=str, default='localhost:9092', help="Provide the bootstrap server")
     parser.add_argument("-kt","--topic",type=str, default='solar', help="Provide the default topic name") 
     parser.add_argument("-x","--duration",type=int, default=0, help="Number of minutes of data to generate (default 0 - forever)")
-    parser.add_argument("-as","--AsString",help="Write the tx time as a string",action="store_true")
-    parser.add_argument("-q","--quiet",help="Quiet mode, press p to see current write statistics",action="store_true")
 
     args = parser.parse_args()
 
@@ -150,22 +128,12 @@ def kafkaworker(workerthread, numofgroups):
             print('{:<12} {:<12}\n'.format('End time',txtime_end.strftime('%Y-%m-%d %H:%M:%S')))
         else:
             print('No end time \n\n')
-
-
-        if args.quiet:
-            print('QUIET MODE - press \'p\' to print how many records are written')
-        if args.duration==0:
-            print('CONTINOUS WRITE MODE - press \'q\' to exit program')
         
         kafka_producer = KafkaProducer(bootstrap_servers=[args.bootstrap], api_version=(0, 10))
 
         counter=0
         bContinue=True
         while bContinue:
-            if args.quiet:
-                keyboard.on_press_key("p", lambda _:printstats(counter,starttime))
-            if args.duration==0:
-                keyboard.on_press_key("q", lambda _:quitwrite(counter,starttime))
             for i in range(0,args.devices):
                 #Get the last value of this particular security
                 w = getvalue(last_watts[i])
@@ -178,7 +146,7 @@ def kafkaworker(workerthread, numofgroups):
                     solar={'device_id' : device_id[i], 'group_id': group_id[i],'timestamp': txtime.strftime('%Y-%m-%dT%H:%M:%SZ'),'maxwatts':250,'obs':[{'watts':w,'amps':a,'temp':t}]}
                     publish_message(kafka_producer=kafka_producer,topic_name=args.topic,key=device_id[i],value=json.dumps(solar))
                     counter=counter+1
-                    if counter%100==0 and not args.quiet:
+                    if counter%100==0:
                       if args.duration>0:
                         print('Generated ' + str(counter) + ' samples ({0:.0%})'.format(counter/(args.devices*args.duration*60)),end="\r")
                       else:
@@ -192,8 +160,6 @@ def kafkaworker(workerthread, numofgroups):
             txtime+=timedelta(seconds=1)
         duration=txtime - dt.now()
         print('\nFinished - ' + str(duration).split('.')[0])
-        if args.quiet:
-            keyboard.unhook_all()
         if kafka_producer is not None:
             kafka_producer.close()
     except:
